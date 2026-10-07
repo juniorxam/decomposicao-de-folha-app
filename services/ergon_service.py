@@ -139,6 +139,9 @@ class ErgonService:
             df_ergon[coluna_setor] = df_ergon[coluna_setor].astype('string').str.strip()
             df_apoio = df_apoio.copy()
             df_apoio['SETOR'] = df_apoio['SETOR'].astype('string').str.strip()
+            df_apoio = df_apoio[
+                df_apoio['SETOR'].notna() & df_apoio['SETOR'].ne('')
+            ].copy()
 
             # Remover duplicatas da planilha de apoio
             df_apoio = df_apoio.drop_duplicates(subset=['SETOR'])
