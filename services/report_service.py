@@ -22,6 +22,24 @@ class ReportService:
         self.processor: DataProcessor = DataProcessor()
         self.validator: DataValidator = DataValidator()
         self.formatter: ExcelFormatter = ExcelFormatter()
+
+    @staticmethod
+    def _nome_aba_unico(nome: Any, nomes_usados: set) -> str:
+        """Gera nome de aba Excel válido, curto e único."""
+        nome_base = str(nome).strip() or 'Relatorio'
+        for caractere in ['[', ']', ':', '*', '?', '/', '\\']:
+            nome_base = nome_base.replace(caractere, '-')
+        nome_base = nome_base[:31] or 'Relatorio'
+
+        candidato = nome_base
+        contador = 2
+        while candidato.lower() in {str(n).lower() for n in nomes_usados}:
+            sufixo = f"_{contador}"
+            candidato = f"{nome_base[:31-len(sufixo)]}{sufixo}"
+            contador += 1
+
+        nomes_usados.add(candidato)
+        return candidato
     
     # ==================== RELATÓRIO DETALHADO DE HOSPITAIS ====================
     
@@ -176,12 +194,13 @@ class ReportService:
             workbook = writer.book
             
             hospitais = df_relatorio['HOSPITAL'].unique()
+            nomes_abas_usados = set()
             
             for hospital in hospitais:
                 df_hospital = df_relatorio[df_relatorio['HOSPITAL'] == hospital].copy()
                 df_hospital = df_hospital.drop('HOSPITAL', axis=1)
                 
-                sheet_name = str(hospital)[:31]
+                sheet_name = self._nome_aba_unico(hospital, nomes_abas_usados)
                 
                 # Escrever dados
                 df_hospital.to_excel(writer, sheet_name=sheet_name, index=False, startrow=2)
@@ -364,12 +383,13 @@ class ReportService:
             workbook = writer.book
             
             superintendencias = df_relatorio['SUPERINTENDENCIA'].unique()
+            nomes_abas_usados = set()
             
             for superintendencia in superintendencias:
                 df_super = df_relatorio[df_relatorio['SUPERINTENDENCIA'] == superintendencia].copy()
                 df_super = df_super.drop('SUPERINTENDENCIA', axis=1)
                 
-                sheet_name = str(superintendencia)[:31]
+                sheet_name = self._nome_aba_unico(superintendencia, nomes_abas_usados)
                 
                 df_super.to_excel(writer, sheet_name=sheet_name, index=False, startrow=2)
                 
@@ -415,12 +435,7 @@ class ReportService:
         if df_hospitais.empty:
             return None
         
-        # Verificar colunas necessárias
-        colunas_necessarias = []
-        for col in colunas_necessarias:
-            if col not in df_hospitais.columns:
-                return None
-        
+
         # Mapear vínculos
         df_hospitais['VINCULO'] = df_hospitais['VINCULO'].astype(str).str.upper().str.strip()
         df_hospitais['VINCULO_MAPEADO'] = df_hospitais['VINCULO'].apply(
@@ -674,12 +689,7 @@ class ReportService:
         if df_super.empty:
             return None
         
-        # Verificar colunas necessárias
-        colunas_necessarias = []
-        for col in colunas_necessarias:
-            if col not in df_super.columns:
-                return None
-        
+
         # Mapear vínculos
         df_super['VINCULO'] = df_super['VINCULO'].astype(str).str.upper().str.strip()
         df_super['VINCULO_MAPEADO'] = df_super['VINCULO'].apply(
