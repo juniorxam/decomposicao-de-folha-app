@@ -660,14 +660,22 @@ class ReportService:
             faltar alguma coluna necessária ou não houver vínculos
             válidos.
         """
+        colunas_necessarias = ['SUPERINTENDENCIA', 'VINCULO', 'VALOR NIVEL/REF - com teto']
+        faltantes = [col for col in colunas_necessarias if col not in df.columns]
+        if faltantes:
+            return None
+
         # Filtrar apenas registros com SUPERINTENDENCIA preenchida
-        df_super = df[df['SUPERINTENDENCIA'].notna() & (df['SUPERINTENDENCIA'] != '')].copy()
+        df_super = df[
+            df['SUPERINTENDENCIA'].notna()
+            & df['SUPERINTENDENCIA'].astype('string').str.strip().ne('')
+        ].copy()
         
         if df_super.empty:
             return None
         
         # Verificar colunas necessárias
-        colunas_necessarias = ['SUPERINTENDENCIA', 'VINCULO', 'VALOR NIVEL/REF - com teto']
+        colunas_necessarias = []
         for col in colunas_necessarias:
             if col not in df_super.columns:
                 return None
