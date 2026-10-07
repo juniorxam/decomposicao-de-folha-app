@@ -107,8 +107,42 @@ class ErgonService:
             if 'NUMFUNC' in df_ergon.columns and 'NUMVINC' in df_ergon.columns:
                 numfunc = df_ergon['NUMFUNC'].astype('string').str.strip()
                 numvinc = df_ergon['NUMVINC'].astype('string').str.strip()
-                numfunc = numfunc.str.replace(r'\.0
-            
+                numfunc = numfunc.str.replace(r'\\.0$', '', regex=True)
+                numvinc = numvinc.str.replace(r'\\.0$', '', regex=True)
+                validos = numfunc.notna() & numvinc.notna() & numfunc.ne('') & numvinc.ne('')
+                df_ergon['NUMERO FUNCIONAL'] = pd.Series(pd.NA, index=df_ergon.index, dtype='string')
+                df_ergon.loc[validos, 'NUMERO FUNCIONAL'] = (
+                    numfunc.loc[validos] + '-' + numvinc.loc[validos]
+                )
+
+            # 4. Mapear vínculos
+            if coluna_vinculo not in df_ergon.columns:
+                raise ValueError(
+                    f"Coluna de vínculo não encontrada no relatório Ergon: {coluna_vinculo}"
+                )
+            df_ergon['VINCULO'] = (
+                df_ergon[coluna_vinculo]
+                .astype('string')
+                .str.strip()
+                .str.upper()
+                .map(DataProcessor.mapear_vinculo)
+            )
+
+            # 5. Preparar para merge
+            if coluna_setor not in df_ergon.columns:
+                raise ValueError(
+                    f"Coluna de setor/lotação não encontrada no relatório Ergon: {coluna_setor}"
+                )
+            if 'SETOR' not in df_apoio.columns:
+                raise ValueError("A planilha de apoio deve conter a coluna 'SETOR'.")
+
+            df_ergon[coluna_setor] = df_ergon[coluna_setor].astype('string').str.strip()
+            df_apoio = df_apoio.copy()
+            df_apoio['SETOR'] = df_apoio['SETOR'].astype('string').str.strip()
+
+            # Remover duplicatas da planilha de apoio
+            df_apoio = df_apoio.drop_duplicates(subset=['SETOR'])
+
             # 6. Realizar merge
             df_merged = pd.merge(
                 df_ergon,
