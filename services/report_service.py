@@ -46,8 +46,13 @@ class ReportService:
             ou None quando não houver hospitais, faltar alguma coluna
             necessária ou não houver vínculos válidos.
         """
+        colunas_necessarias = ['LOCAL', 'SETOR_AJUSTADO', 'CARGO', 'VINCULO', 'VALOR NIVEL/REF - com teto']
+        faltantes = [col for col in colunas_necessarias if col not in df.columns]
+        if faltantes:
+            return None
+
         # Filtrar apenas hospitais
-        df_hospitais = df[df['LOCAL'] == 'HOSPITAL'].copy()
+        df_hospitais = df[df['LOCAL'].astype('string').str.strip().str.upper() == 'HOSPITAL'].copy()
         
         if df_hospitais.empty:
             return None
