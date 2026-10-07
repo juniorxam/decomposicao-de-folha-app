@@ -70,9 +70,21 @@ class DataValidator:
         """
         if DataValidator._COLUNA_MES_ANO_FOLHA in df.columns:
             # FOLHA mensal
-            return DataValidator._MAPEAMENTO_TIPO_RELATORIO[0]
-        # ATIVOS (cadastro de servidores)
-        return DataValidator._MAPEAMENTO_TIPO_RELATORIO[1]
+            coluna_setor, coluna_vinculo, eh_ativos = DataValidator._MAPEAMENTO_TIPO_RELATORIO[0]
+        else:
+            # ATIVOS (cadastro de servidores)
+            coluna_setor, coluna_vinculo, eh_ativos = DataValidator._MAPEAMENTO_TIPO_RELATORIO[1]
+
+        obrigatorias = [coluna_setor, coluna_vinculo]
+        faltantes = [col for col in obrigatorias if col not in df.columns]
+        if faltantes:
+            tipo = 'ATIVOS' if eh_ativos else 'FOLHA'
+            raise ValueError(
+                f"Relatório identificado como {tipo}, mas faltam as colunas obrigatórias: "
+                f"{', '.join(faltantes)}"
+            )
+
+        return coluna_setor, coluna_vinculo, eh_ativos
     
     @staticmethod
     def tem_hospitais(df: pd.DataFrame) -> bool:
@@ -91,7 +103,9 @@ class DataValidator:
         """
         return (
             'LOCAL' in df.columns
-            and (df['LOCAL'] == DataValidator._LOCAL_HOSPITAL).any()
+            and df['LOCAL'].astype('string').str.strip().str.upper().eq(
+                DataValidator._LOCAL_HOSPITAL
+            ).any()
         )
     
     @staticmethod
