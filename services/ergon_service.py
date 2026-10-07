@@ -279,6 +279,12 @@ class ErgonService:
             anos_brutos - (~aniversario_ocorreu).astype(int)
         ).astype('Int64')
 
+        # Datas de nascimento futuras indicam erro de cadastro e não
+        # devem gerar idade negativa nem classificação etária.
+        mask_idade_invalida = mask_validas & (df['IDADE'] < 0)
+        df.loc[mask_idade_invalida, 'IDADE'] = pd.NA
+        mask_validas = mask_validas & ~mask_idade_invalida
+
         # ===== Faixa etária vetorizada via pd.cut =====
         # Bins e labels correspondem exatamente às constantes
         # FAIXAS_ETARIAS e ao método `_determinar_faixa_etaria` do
