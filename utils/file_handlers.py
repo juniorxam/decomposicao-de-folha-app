@@ -62,11 +62,25 @@ class FileHandler:
                 )
             
             if extensao == '.csv':
-                return FileHandler._ler_csv(uploaded_file)
+                df = FileHandler._ler_csv(uploaded_file)
             elif extensao == '.xlsx':
-                return pd.read_excel(uploaded_file, engine='openpyxl')
+                uploaded_file.seek(0)
+                df = pd.read_excel(uploaded_file, engine='openpyxl')
             elif extensao == '.xls':
-                return pd.read_excel(uploaded_file, engine='xlrd')
+                uploaded_file.seek(0)
+                df = pd.read_excel(uploaded_file, engine='xlrd')
+            else:
+                raise ValueError(f"Formato de arquivo não suportado: {extensao}")
+
+            if df.empty or len(df.columns) == 0:
+                raise ValueError("O arquivo está vazio ou não possui colunas reconhecíveis.")
+
+            # Remove espaços/BOM dos nomes das colunas sem alterar os dados.
+            df.columns = [
+                str(col).replace('\ufeff', '').strip()
+                for col in df.columns
+            ]
+            return df
         except Exception as e:
             raise ValueError(f"Erro ao ler o arquivo {filename}: {str(e)}")
     
