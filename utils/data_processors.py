@@ -279,38 +279,36 @@ class DataProcessor:
         if not colunas_presentes:
             return df
         
-        coluna_especial = DataProcessor._COLUNA_MOEDA_ESPECIAL
-        colunas_regulares = [
-            c for c in colunas_presentes if c != coluna_especial
-        ]
-        
-        # ===== Colunas regulares (regra única) em lote =====
-        # Encadeia as transformações em poucas passadas sobre o
-        # sub-DataFrame, reduzindo a quantidade de objetos
-        # intermediários criados em relação ao loop original.
-        if colunas_regulares:
-            df[colunas_regulares] = (
-                df[colunas_regulares]
-                .astype(str)
-                .apply(lambda s: s.str.strip().str.replace(',', '.', regex=False))
-                .apply(lambda s: pd.to_numeric(s, errors='coerce'))
-                .fillna(0)
+        def converter_serie(serie: pd.Series) -> pd.Series:
+            """Converte uma série para float aceitando formatos brasileiros."""
+            s = serie.astype('string').str.strip()
+            s = s.str.replace('R$', '', regex=False).str.replace(' ', '', regex=False)
+
+            tem_virgula = s.str.contains(',', regex=False, na=False)
+            tem_ponto = s.str.contains('.', regex=False, na=False)
+
+            # 1.234,56 -> 1234.56
+            ambos = tem_virgula & tem_ponto
+            s = s.mask(
+                ambos,
+                s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
             )
-        
-        # ===== Coluna especial (VALOR_SIMBOLO) =====
-        # Regra adicional: remove separadores de milhar e caracteres
-        # não numéricos antes da conversão.
-        if coluna_especial in colunas_presentes:
-            s = (
-                df[coluna_especial]
-                .astype(str)
-                .str.strip()
-                .str.replace('.', '', regex=False)
-                .str.replace(',', '.', regex=False)
-                .str.replace(r'[^\d\.\-]', '', regex=True)
-            )
-            df[coluna_especial] = pd.to_numeric(s, errors='coerce').fillna(0)
-        
+
+            # 1234,56 -> 1234.56
+            somente_virgula = tem_virgula & ~tem_ponto
+            s = s.mask(somente_virgula, s.str.replace(',', '.', regex=False))
+
+            # 1.234 -> 1234, mas 1234.56 continua 1234.56.
+            somente_ponto = tem_ponto & ~tem_virgula
+            milhares = somente_ponto & s.str.fullmatch(r'-?\d{1,3}(?:\.\d{3})+')
+            s = s.mask(milhares, s.str.replace('.', '', regex=False))
+
+            s = s.str.replace(r'[^\d\.\-]', '', regex=True)
+            return pd.to_numeric(s, errors='coerce').fillna(0)
+
+        for coluna in colunas_presentes:
+            df[coluna] = converter_serie(df[coluna])
+
         return df
     
     @staticmethod
