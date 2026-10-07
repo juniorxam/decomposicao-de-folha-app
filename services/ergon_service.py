@@ -168,8 +168,13 @@ class ErgonService:
                 df_merged = self.processor.aplicar_teto_salarial(df_merged)
             
             # 10. Remover duplicatas
+            # Quando houver número funcional, remove somente repetições
+            # de chaves preenchidas. Registros sem chave são preservados
+            # para não colapsar vários servidores em uma única linha vazia.
             if 'NUMERO FUNCIONAL' in df_merged.columns:
-                df_merged = df_merged.drop_duplicates(subset=['NUMERO FUNCIONAL'], keep='first')
+                chave = df_merged['NUMERO FUNCIONAL'].astype('string').str.strip()
+                duplicada = chave.notna() & chave.ne('') & chave.duplicated(keep='first')
+                df_merged = df_merged.loc[~duplicada].copy()
             else:
                 df_merged = df_merged.drop_duplicates()
             
