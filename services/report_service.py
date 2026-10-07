@@ -972,7 +972,7 @@ class ReportService:
         
         # Cabeçalho
         worksheet.write(1, 0, 'CARGO', header_format)
-        worksheet.merge_range(1, 1, 1, 2, 'CONTRATATO', header_format)
+        worksheet.merge_range(1, 1, 1, 2, 'CONTRATADO', header_format)
         worksheet.merge_range(1, 3, 1, 4, 'EFETIVO', header_format)
         worksheet.merge_range(1, 5, 1, 6, 'COMISSIONADO', header_format)
         worksheet.merge_range(1, 7, 1, 8, 'TOTAL', header_format)
