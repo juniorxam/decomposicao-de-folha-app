@@ -101,24 +101,385 @@ class ErgonService:
             df_ergon = df_ergon.dropna(how='all')
             
             # 3. Criar número funcional
+            # Mantém identificadores como texto para evitar artefatos de
+            # conversão numérica (ex.: 123.0-1.0) e não cria uma chave
+            # falsa quando NUMFUNC/NUMVINC estiverem ausentes.
             if 'NUMFUNC' in df_ergon.columns and 'NUMVINC' in df_ergon.columns:
-                df_ergon['NUMERO FUNCIONAL'] = (
-                    df_ergon['NUMFUNC'].astype(str).str.strip() + '-' + 
-                    df_ergon['NUMVINC'].astype(str).str.strip()
+                numfunc = df_ergon['NUMFUNC'].astype('string').str.strip()
+                numvinc = df_ergon['NUMVINC'].astype('string').str.strip()
+                numfunc = numfunc.str.replace(r'\.0
+            
+            # 6. Realizar merge
+            df_merged = pd.merge(
+                df_ergon,
+                df_apoio,
+                left_on=coluna_setor,
+                right_on='SETOR',
+                how='left'
+            )
+
+            # Coluna usada no relatório geral exportado pela aplicação.
+            df_merged = self.processor.adicionar_cargo_ajustado(df_merged)
+            
+            # 7. Converter colunas
+            df_merged = self.processor.converter_colunas_moeda(df_merged)
+            df_merged = self.processor.converter_colunas_inteiro(df_merged)
+            
+            # 8. Calcular idade (apenas para ativos)
+            if eh_ativos and 'DTNASC' in df_merged.columns:
+                df_merged = self._calcular_idades(df_merged)
+            
+            # 9. Aplicar teto salarial (apenas para ativos)
+            if eh_ativos:
+                df_merged = self.processor.aplicar_teto_salarial(df_merged)
+            
+            # 10. Remover duplicatas
+            if 'NUMERO FUNCIONAL' in df_merged.columns:
+                df_merged = df_merged.drop_duplicates(subset=['NUMERO FUNCIONAL'], keep='first')
+            else:
+                df_merged = df_merged.drop_duplicates()
+            
+            # 11. Adicionar ordem
+            df_merged = self.processor.adicionar_coluna_ordem(df_merged)
+            
+            # 12. Informações do processamento
+            info = {
+                'eh_relatorio_ativos': eh_ativos,
+                'total_registros': len(df_merged),
+                'colunas': list(df_merged.columns)
+            }
+            
+            return ResultadoProcessamento(df=df_merged, info=info)
+            
+        except Exception as e:
+            raise ValueError(f"Erro no processamento: {str(e)}")
+    
+    def _calcular_idades(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calcula idade, faixa etária e indicação de servidor idoso de forma
+        vetorizada, substituindo o loop `iterrows` original para ganho
+        expressivo de desempenho e redução de uso de memória.
+
+        Comportamento preservado em relação à implementação anterior:
+          - Valores vazios/NaN em 'DTNASC' geram idade ausente (pd.NA) e
+            faixa 'SEM INFORMACAO'.
+          - Os formatos de data são tentados na ordem definida em
+            FORMATOS_DATA; valores não resolvidos passam por um fallback
+            genérico com `dayfirst=True` (equivalente ao último recurso
+            de `_converter_data`).
+          - As faixas etárias seguem as constantes FAIXAS_ETARIAS do
+            `config`, produzindo os mesmos rótulos da versão original.
+          - 'SERVIDOR IDOSO' = 'SIM' apenas quando a idade é válida e
+            maior ou igual a 60; caso contrário, 'NAO'.
+
+        Args:
+            df: DataFrame contendo a coluna 'DTNASC' com as datas de
+                nascimento dos servidores.
+
+        Returns:
+            Novo DataFrame com as colunas 'IDADE', 'FAIXA ETARIA' e
+            'SERVIDOR IDOSO' preenchidas.
+        """
+        df = df.copy()
+
+        # Inicializa colunas com valores padrão (mesmo comportamento do
+        # original para linhas que não receberão atualização).
+        df['IDADE'] = pd.Series(pd.NA, index=df.index, dtype='Int64')
+        df['FAIXA ETARIA'] = 'SEM INFORMACAO'
+        df['SERVIDOR IDOSO'] = 'NAO'
+
+        # Sem DTNASC, nada a calcular — mantém defaults.
+        if 'DTNASC' not in df.columns:
+            return df
+
+        serie_dtnasc = df['DTNASC']
+
+        # Máscara de valores reconhecidamente vazios (não tenta converter).
+        mascara_vazia = serie_dtnasc.isna() | (
+            serie_dtnasc.astype(str).str.strip() == ''
+        )
+
+        # Se todos os valores forem vazios, nada a fazer.
+        if mascara_vazia.all():
+            return df
+
+        # ===== Conversão vetorizada de datas =====
+        # Tenta cada formato específico em ordem; o que falhar fica para
+        # o próximo formato ou para o fallback genérico ao final.
+        datas: pd.Series = pd.Series(
+            pd.NaT, index=df.index, dtype='datetime64[ns]'
+        )
+
+        for fmt in FORMATOS_DATA:
+            pendentes = datas.isna() & ~mascara_vazia
+            if not pendentes.any():
+                break
+            datas.loc[pendentes] = pd.to_datetime(
+                serie_dtnasc[pendentes],
+                format=fmt,
+                errors='coerce'
+            )
+
+        # Fallback final: parsing genérico (dayfirst=True prioriza DD/MM).
+        pendentes = datas.isna() & ~mascara_vazia
+        if pendentes.any():
+            datas.loc[pendentes] = pd.to_datetime(
+                serie_dtnasc[pendentes],
+                errors='coerce',
+                dayfirst=True
+            )
+
+        mask_validas = datas.notna()
+        if not mask_validas.any():
+            return df
+
+        # ===== Cálculo vetorizado da idade =====
+        # Equivalente a relativedelta(hoje, data).years: anos completos
+        # considerando se o aniversário já ocorreu no ano corrente.
+        hoje = pd.Timestamp.now().normalize()
+        anos_brutos = hoje.year - datas.dt.year
+        aniversario_ocorreu = (datas.dt.month < hoje.month) | (
+            (datas.dt.month == hoje.month) & (datas.dt.day <= hoje.day)
+        )
+        df['IDADE'] = (
+            anos_brutos - (~aniversario_ocorreu).astype(int)
+        ).astype('Int64')
+
+        # ===== Faixa etária vetorizada via pd.cut =====
+        # Bins e labels correspondem exatamente às constantes
+        # FAIXAS_ETARIAS e ao método `_determinar_faixa_etaria` do
+        # DataProcessor (após o replace '_' -> ' ' e 'A' -> 'a').
+        bins: list = [-1, 17, 29, 39, 49, 54, 59, float('inf')]
+        labels: list = [
+            'MENOR DE 18',
+            '18 a 29',
+            '30 a 39',
+            '40 a 49',
+            '50 a 54',
+            '55 a 59',
+            '60 OU MAIS'
+        ]
+        faixas = pd.cut(
+            df['IDADE'].astype('float'),
+            bins=bins,
+            labels=labels,
+            right=True
+        )
+        # Atribui faixas apenas às linhas com data válida; idades
+        # negativas (datas futuras por erro de cadastro) caem fora dos
+        # bins e também viram 'SEM INFORMACAO'.
+        df.loc[mask_validas, 'FAIXA ETARIA'] = (
+            faixas[mask_validas].astype(object).fillna('SEM INFORMACAO')
+        )
+
+        # ===== Servidor idoso (vetorizado) =====
+        # 'SIM' apenas quando idade é válida e >= 60.
+        mask_idosos = mask_validas & (df['IDADE'].fillna(-1) >= 60)
+        df.loc[mask_idosos, 'SERVIDOR IDOSO'] = 'SIM'
+
+        return df
+, '', regex=True)
+                numvinc = numvinc.str.replace(r'\.0
+            
+            # 6. Realizar merge
+            df_merged = pd.merge(
+                df_ergon,
+                df_apoio,
+                left_on=coluna_setor,
+                right_on='SETOR',
+                how='left'
+            )
+
+            # Coluna usada no relatório geral exportado pela aplicação.
+            df_merged = self.processor.adicionar_cargo_ajustado(df_merged)
+            
+            # 7. Converter colunas
+            df_merged = self.processor.converter_colunas_moeda(df_merged)
+            df_merged = self.processor.converter_colunas_inteiro(df_merged)
+            
+            # 8. Calcular idade (apenas para ativos)
+            if eh_ativos and 'DTNASC' in df_merged.columns:
+                df_merged = self._calcular_idades(df_merged)
+            
+            # 9. Aplicar teto salarial (apenas para ativos)
+            if eh_ativos:
+                df_merged = self.processor.aplicar_teto_salarial(df_merged)
+            
+            # 10. Remover duplicatas
+            if 'NUMERO FUNCIONAL' in df_merged.columns:
+                df_merged = df_merged.drop_duplicates(subset=['NUMERO FUNCIONAL'], keep='first')
+            else:
+                df_merged = df_merged.drop_duplicates()
+            
+            # 11. Adicionar ordem
+            df_merged = self.processor.adicionar_coluna_ordem(df_merged)
+            
+            # 12. Informações do processamento
+            info = {
+                'eh_relatorio_ativos': eh_ativos,
+                'total_registros': len(df_merged),
+                'colunas': list(df_merged.columns)
+            }
+            
+            return ResultadoProcessamento(df=df_merged, info=info)
+            
+        except Exception as e:
+            raise ValueError(f"Erro no processamento: {str(e)}")
+    
+    def _calcular_idades(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calcula idade, faixa etária e indicação de servidor idoso de forma
+        vetorizada, substituindo o loop `iterrows` original para ganho
+        expressivo de desempenho e redução de uso de memória.
+
+        Comportamento preservado em relação à implementação anterior:
+          - Valores vazios/NaN em 'DTNASC' geram idade ausente (pd.NA) e
+            faixa 'SEM INFORMACAO'.
+          - Os formatos de data são tentados na ordem definida em
+            FORMATOS_DATA; valores não resolvidos passam por um fallback
+            genérico com `dayfirst=True` (equivalente ao último recurso
+            de `_converter_data`).
+          - As faixas etárias seguem as constantes FAIXAS_ETARIAS do
+            `config`, produzindo os mesmos rótulos da versão original.
+          - 'SERVIDOR IDOSO' = 'SIM' apenas quando a idade é válida e
+            maior ou igual a 60; caso contrário, 'NAO'.
+
+        Args:
+            df: DataFrame contendo a coluna 'DTNASC' com as datas de
+                nascimento dos servidores.
+
+        Returns:
+            Novo DataFrame com as colunas 'IDADE', 'FAIXA ETARIA' e
+            'SERVIDOR IDOSO' preenchidas.
+        """
+        df = df.copy()
+
+        # Inicializa colunas com valores padrão (mesmo comportamento do
+        # original para linhas que não receberão atualização).
+        df['IDADE'] = pd.Series(pd.NA, index=df.index, dtype='Int64')
+        df['FAIXA ETARIA'] = 'SEM INFORMACAO'
+        df['SERVIDOR IDOSO'] = 'NAO'
+
+        # Sem DTNASC, nada a calcular — mantém defaults.
+        if 'DTNASC' not in df.columns:
+            return df
+
+        serie_dtnasc = df['DTNASC']
+
+        # Máscara de valores reconhecidamente vazios (não tenta converter).
+        mascara_vazia = serie_dtnasc.isna() | (
+            serie_dtnasc.astype(str).str.strip() == ''
+        )
+
+        # Se todos os valores forem vazios, nada a fazer.
+        if mascara_vazia.all():
+            return df
+
+        # ===== Conversão vetorizada de datas =====
+        # Tenta cada formato específico em ordem; o que falhar fica para
+        # o próximo formato ou para o fallback genérico ao final.
+        datas: pd.Series = pd.Series(
+            pd.NaT, index=df.index, dtype='datetime64[ns]'
+        )
+
+        for fmt in FORMATOS_DATA:
+            pendentes = datas.isna() & ~mascara_vazia
+            if not pendentes.any():
+                break
+            datas.loc[pendentes] = pd.to_datetime(
+                serie_dtnasc[pendentes],
+                format=fmt,
+                errors='coerce'
+            )
+
+        # Fallback final: parsing genérico (dayfirst=True prioriza DD/MM).
+        pendentes = datas.isna() & ~mascara_vazia
+        if pendentes.any():
+            datas.loc[pendentes] = pd.to_datetime(
+                serie_dtnasc[pendentes],
+                errors='coerce',
+                dayfirst=True
+            )
+
+        mask_validas = datas.notna()
+        if not mask_validas.any():
+            return df
+
+        # ===== Cálculo vetorizado da idade =====
+        # Equivalente a relativedelta(hoje, data).years: anos completos
+        # considerando se o aniversário já ocorreu no ano corrente.
+        hoje = pd.Timestamp.now().normalize()
+        anos_brutos = hoje.year - datas.dt.year
+        aniversario_ocorreu = (datas.dt.month < hoje.month) | (
+            (datas.dt.month == hoje.month) & (datas.dt.day <= hoje.day)
+        )
+        df['IDADE'] = (
+            anos_brutos - (~aniversario_ocorreu).astype(int)
+        ).astype('Int64')
+
+        # ===== Faixa etária vetorizada via pd.cut =====
+        # Bins e labels correspondem exatamente às constantes
+        # FAIXAS_ETARIAS e ao método `_determinar_faixa_etaria` do
+        # DataProcessor (após o replace '_' -> ' ' e 'A' -> 'a').
+        bins: list = [-1, 17, 29, 39, 49, 54, 59, float('inf')]
+        labels: list = [
+            'MENOR DE 18',
+            '18 a 29',
+            '30 a 39',
+            '40 a 49',
+            '50 a 54',
+            '55 a 59',
+            '60 OU MAIS'
+        ]
+        faixas = pd.cut(
+            df['IDADE'].astype('float'),
+            bins=bins,
+            labels=labels,
+            right=True
+        )
+        # Atribui faixas apenas às linhas com data válida; idades
+        # negativas (datas futuras por erro de cadastro) caem fora dos
+        # bins e também viram 'SEM INFORMACAO'.
+        df.loc[mask_validas, 'FAIXA ETARIA'] = (
+            faixas[mask_validas].astype(object).fillna('SEM INFORMACAO')
+        )
+
+        # ===== Servidor idoso (vetorizado) =====
+        # 'SIM' apenas quando idade é válida e >= 60.
+        mask_idosos = mask_validas & (df['IDADE'].fillna(-1) >= 60)
+        df.loc[mask_idosos, 'SERVIDOR IDOSO'] = 'SIM'
+
+        return df
+, '', regex=True)
+                validos = numfunc.notna() & numvinc.notna() & numfunc.ne('') & numvinc.ne('')
+                df_ergon['NUMERO FUNCIONAL'] = pd.Series(pd.NA, index=df_ergon.index, dtype='string')
+                df_ergon.loc[validos, 'NUMERO FUNCIONAL'] = (
+                    numfunc.loc[validos] + '-' + numvinc.loc[validos]
                 )
             
             # 4. Mapear vínculos
             if coluna_vinculo in df_ergon.columns:
-                df_ergon['VINCULO'] = df_ergon[coluna_vinculo].astype(str).str.strip().str.upper()
-                df_ergon['VINCULO'] = df_ergon['VINCULO'].replace(
-                    ['CONTRATADO', 'CONCURSADO', 'REMAN GOIAS - ESTABILIZADO', 'REMAN GOIAS - NAO ESTAVEL'], 
-                    'EFETIVO'
+                df_ergon['VINCULO'] = (
+                    df_ergon[coluna_vinculo]
+                    .astype('string')
+                    .str.strip()
+                    .str.upper()
                 )
-                df_ergon['VINCULO'] = df_ergon['VINCULO'].replace('AGENTE POLITICO', 'COMISSIONADO')
+                df_ergon['VINCULO'] = df_ergon['VINCULO'].map(
+                    DataProcessor.mapear_vinculo
+                )
             
             # 5. Preparar para merge
-            df_ergon[coluna_setor] = df_ergon[coluna_setor].astype(str).str.strip()
-            df_apoio['SETOR'] = df_apoio['SETOR'].astype(str).str.strip()
+            if coluna_setor not in df_ergon.columns:
+                raise ValueError(
+                    f"Coluna de setor/lotação não encontrada no relatório Ergon: {coluna_setor}"
+                )
+            if 'SETOR' not in df_apoio.columns:
+                raise ValueError("A planilha de apoio deve conter a coluna 'SETOR'.")
+            
+            df_ergon[coluna_setor] = df_ergon[coluna_setor].astype('string').str.strip()
+            df_apoio = df_apoio.copy()
+            df_apoio['SETOR'] = df_apoio['SETOR'].astype('string').str.strip()
             
             # Remover duplicatas da planilha de apoio
             df_apoio = df_apoio.drop_duplicates(subset=['SETOR'])
