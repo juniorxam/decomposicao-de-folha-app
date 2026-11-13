@@ -1047,9 +1047,16 @@ class MainPage:
             'De 6 a 10 salários mínimos', 'De 10 a 15 salários mínimos',
             'Mais de 15 salários mínimos', 'SEM INFORMACAO'
         ]
-        valores = pd.to_numeric(servidores.get(coluna_valor, 0), errors='coerce').fillna(0)
+        if coluna_valor not in servidores.columns:
+            return pd.DataFrame()
+        valores = pd.to_numeric(servidores[coluna_valor], errors='coerce').fillna(0)
         servidores = servidores.copy()
         servidores['_VALOR_RESUMO'] = valores
+        if coluna_faixa_reais not in servidores.columns:
+            from utils.data_processors import DataProcessor
+            servidores[coluna_faixa_reais] = servidores[coluna_valor].apply(
+                DataProcessor.calcular_faixa_salarial_reais
+            )
         servidores['FAIXA SALARIAL'] = pd.Categorical(
             servidores['FAIXA SALARIAL'], categories=ordem, ordered=True
         )
