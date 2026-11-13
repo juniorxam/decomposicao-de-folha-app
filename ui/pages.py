@@ -1252,14 +1252,14 @@ class MainPage:
                 ]
                 st.rerun()
         with col3:
-                if st.button("💰 Salariais", use_container_width=True):
-                    salariais = ['ORDEM', 'NUMERO FUNCIONAL', 'NOME', 'VINCULO', 'VALOR NIVEL/REF',
-                            'VALOR_SIMBOLO', 'VALOR NIVEL/REF - valor real',
-                            'VALOR NIVEL/REF - com teto', 'FAIXA SALARIAL',
-                            'FAIXA SALARIAL (R$)', 'FAIXA SALARIAL (R$) - VALOR REAL',
-                            'PERCENTUAL DO QUANTITATIVO',
-                            'PERCENTUAL DO VALOR (COM TETO)',
-                            'PERCENTUAL DO VALOR (VALOR REAL)', 'SITUACAO SALARIAL']
+            if st.button("💰 Salariais", use_container_width=True):
+                salariais = ['ORDEM', 'NUMERO FUNCIONAL', 'NOME', 'VINCULO', 'VALOR NIVEL/REF',
+                             'VALOR_SIMBOLO', 'VALOR NIVEL/REF - valor real',
+                             'VALOR NIVEL/REF - com teto', 'FAIXA SALARIAL',
+                             'FAIXA SALARIAL (R$)', 'FAIXA SALARIAL (R$) - VALOR REAL',
+                             'PERCENTUAL DO QUANTITATIVO',
+                             'PERCENTUAL DO VALOR (COM TETO)',
+                             'PERCENTUAL DO VALOR (VALOR REAL)', 'SITUACAO SALARIAL']
                 st.session_state.colunas_selecionadas = [
                     col for col in salariais if col in colunas_disponiveis
                 ]
