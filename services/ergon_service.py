@@ -169,6 +169,11 @@ class ErgonService:
             # 9. Aplicar teto salarial (apenas para ativos)
             if eh_ativos:
                 df_merged = self.processor.aplicar_teto_salarial(df_merged)
+
+            # Percentuais e classificação de servidor são calculados por
+            # linha/vínculo. Pensões ficam marcadas para a área separada.
+            if eh_ativos:
+                df_merged = self.processor.adicionar_metricas_salariais(df_merged)
             
             # 10. Remover duplicatas
             # Quando houver número funcional, remove somente repetições

@@ -225,6 +225,8 @@ class MainPage:
             "📊 Dashboard",
             "👥 Análise Pessoal",
             "💰 Análise Financeira",
+            "📈 Resumo Salarial",
+            "🧾 Pensões",
             "🏥 Hospitais",
             "🏛️ Superintendências",
             "🔍 Filtros & Colunas",
@@ -239,17 +241,23 @@ class MainPage:
         
         with tabs[2]:
             self._render_analise_financeira_tab()
-        
+
         with tabs[3]:
-            self._render_hospital_tab()
-        
+            self._render_resumo_salarial_tab()
+
         with tabs[4]:
-            self._render_superintendencia_tab()
-        
+            self._render_pensoes_tab()
+
         with tabs[5]:
-            self._render_filters_tab()
-        
+            self._render_hospital_tab()
+
         with tabs[6]:
+            self._render_superintendencia_tab()
+
+        with tabs[7]:
+            self._render_filters_tab()
+
+        with tabs[8]:
             self._render_export_tab()
     
     # ==================== FILTROS DO DASHBOARD (REUTILIZÁVEL) ====================
@@ -1015,6 +1023,113 @@ class MainPage:
                         st.caption(f"{row['Faixa Salarial']}: {row['Quantidade']:,} ({perc:.1f}%)")
             else:
                 st.info("Dados de faixa salarial não disponíveis")
+
+    # ==================== RESUMO SALARIAL E PENSÕES ====================
+
+    @staticmethod
+    def _servidores_apenas(df: pd.DataFrame) -> pd.DataFrame:
+        """Retorna todas as linhas de servidores, excluindo pensões."""
+        if 'EH_SERVIDOR' in df.columns:
+            return df[df['EH_SERVIDOR']].copy()
+        if 'VINCULO' in df.columns:
+            return df[df['VINCULO'].astype('string').str.upper() != 'PENSAO'].copy()
+        return df.copy()
+
+    def _montar_resumo_faixas(self, df: pd.DataFrame, coluna_valor: str,
+                              coluna_faixa_reais: str) -> pd.DataFrame:
+        """Monta uma tabela de faixas contando cada linha/vínculo."""
+        servidores = self._servidores_apenas(df)
+        if servidores.empty or 'FAIXA SALARIAL' not in servidores.columns:
+            return pd.DataFrame()
+
+        ordem = [
+            'Até 3 salários mínimos', 'De 3 a 6 salários mínimos',
+            'De 6 a 10 salários mínimos', 'De 10 a 15 salários mínimos',
+            'Mais de 15 salários mínimos', 'SEM INFORMACAO'
+        ]
+        valores = pd.to_numeric(servidores.get(coluna_valor, 0), errors='coerce').fillna(0)
+        servidores = servidores.copy()
+        servidores['_VALOR_RESUMO'] = valores
+        servidores['FAIXA SALARIAL'] = pd.Categorical(
+            servidores['FAIXA SALARIAL'], categories=ordem, ordered=True
+        )
+        resumo = servidores.groupby('FAIXA SALARIAL', observed=False).agg(
+            QUANTIDADE=('FAIXA SALARIAL', 'size'),
+            VALOR_TOTAL=('_VALOR_RESUMO', 'sum'),
+            **{'FAIXA EM REAIS': (coluna_faixa_reais, 'first')}
+        ).reset_index()
+        resumo = resumo[resumo['QUANTIDADE'] > 0].copy()
+        total_qtd = int(resumo['QUANTIDADE'].sum())
+        total_valor = float(resumo['VALOR_TOTAL'].sum())
+        resumo['% DO QUANTITATIVO'] = resumo['QUANTIDADE'] / total_qtd * 100 if total_qtd else 0
+        resumo['% DO VALOR'] = resumo['VALOR_TOTAL'] / total_valor * 100 if total_valor else 0
+
+        total = pd.DataFrame([{
+            'FAIXA SALARIAL': 'TOTAL GERAL',
+            'FAIXA EM REAIS': '',
+            'QUANTIDADE': total_qtd,
+            'VALOR_TOTAL': total_valor,
+            '% DO QUANTITATIVO': 100.0 if total_qtd else 0.0,
+            '% DO VALOR': 100.0 if total_valor else 0.0
+        }])
+        return pd.concat([resumo, total], ignore_index=True)
+
+    def _render_resumo_faixa(self, titulo: str, df_resumo: pd.DataFrame, chave: str) -> None:
+        st.markdown(f"#### {titulo}")
+        if df_resumo.empty:
+            st.info("Não há dados suficientes para gerar este resumo.")
+            return
+        exibicao = df_resumo.copy()
+        exibicao['VALOR_TOTAL'] = exibicao['VALOR_TOTAL'].map(lambda x: formatar_numero_completo(x, 'R$ '))
+        exibicao['% DO QUANTITATIVO'] = exibicao['% DO QUANTITATIVO'].map(lambda x: f'{x:.2f}%')
+        exibicao['% DO VALOR'] = exibicao['% DO VALOR'].map(lambda x: f'{x:.2f}%')
+        st.dataframe(exibicao, use_container_width=True, hide_index=True)
+        excel_data = self.formatter.formatar_excel(df_resumo, f'Resumo {chave}')
+        st.download_button(
+            f'📥 Baixar {titulo}', data=excel_data,
+            file_name=f'resumo_faixas_{chave.lower().replace(" ", "_")}.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            key=f'download_resumo_{chave}', use_container_width=True
+        )
+
+    def _render_resumo_salarial_tab(self):
+        """Exibe os resumos por faixa com teto e com valor real."""
+        st.markdown('## 📈 Resumo das Faixas Salariais')
+        df = st.session_state.df_completo
+        resumo_teto = self._montar_resumo_faixas(
+            df, 'VALOR NIVEL/REF - com teto', 'FAIXA SALARIAL (R$)'
+        )
+        resumo_real = self._montar_resumo_faixas(
+            df, 'VALOR NIVEL/REF - valor real', 'FAIXA SALARIAL (R$) - VALOR REAL'
+        )
+        self._render_resumo_faixa('Resumo considerando o teto salarial', resumo_teto, 'COM_TETO')
+        st.markdown('---')
+        self._render_resumo_faixa('Resumo considerando o valor real', resumo_real, 'VALOR_REAL')
+
+    def _render_pensoes_tab(self):
+        """Exibe pensões fora dos totais de servidores."""
+        st.markdown('## 🧾 Pensões')
+        df = st.session_state.df_completo
+        if 'VINCULO' not in df.columns:
+            st.info('Não há coluna de vínculo disponível.')
+            return
+        pensoes = df[df['VINCULO'].astype('string').str.upper() == 'PENSAO'].copy()
+        if pensoes.empty:
+            st.info('Nenhuma pensão encontrada nos dados processados.')
+            return
+        valor_coluna = 'VALOR NIVEL/REF - com teto' if 'VALOR NIVEL/REF - com teto' in pensoes else 'VALOR NIVEL/REF'
+        valor_total = pd.to_numeric(pensoes[valor_coluna], errors='coerce').fillna(0).sum()
+        col1, col2 = st.columns(2)
+        col1.metric('Quantidade de pensões', f'{len(pensoes):,}')
+        col2.metric('Valor total', formatar_numero_completo(valor_total, 'R$ '))
+        st.dataframe(pensoes, use_container_width=True, hide_index=True)
+        excel_data = self.formatter.formatar_excel(pensoes, 'Pensoes')
+        st.download_button(
+            '📥 Baixar tabela de pensões', data=excel_data,
+            file_name='pensoes.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            key='download_pensoes', use_container_width=True
+        )
     
     # ==================== UPLOAD ====================
     
@@ -1130,10 +1245,14 @@ class MainPage:
                 ]
                 st.rerun()
         with col3:
-            if st.button("💰 Salariais", use_container_width=True):
-                salariais = ['ORDEM', 'NUMERO FUNCIONAL', 'NOME', 'VINCULO', 'VALOR NIVEL/REF', 
-                            'VALOR_SIMBOLO', 'VALOR NIVEL/REF - com teto', 'FAIXA SALARIAL', 
-                            'SITUACAO SALARIAL']
+                if st.button("💰 Salariais", use_container_width=True):
+                    salariais = ['ORDEM', 'NUMERO FUNCIONAL', 'NOME', 'VINCULO', 'VALOR NIVEL/REF',
+                            'VALOR_SIMBOLO', 'VALOR NIVEL/REF - valor real',
+                            'VALOR NIVEL/REF - com teto', 'FAIXA SALARIAL',
+                            'FAIXA SALARIAL (R$)', 'FAIXA SALARIAL (R$) - VALOR REAL',
+                            'PERCENTUAL DO QUANTITATIVO',
+                            'PERCENTUAL DO VALOR (COM TETO)',
+                            'PERCENTUAL DO VALOR (VALOR REAL)', 'SITUACAO SALARIAL']
                 st.session_state.colunas_selecionadas = [
                     col for col in salariais if col in colunas_disponiveis
                 ]

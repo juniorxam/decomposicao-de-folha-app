@@ -11,6 +11,7 @@ from typing import Optional, Tuple, List, Dict, Any
 from config import (
     FAIXAS_ETARIAS, FORMATOS_DATA, SALARIO_MINIMO, TETO_ESTADUAL,
     VINCULOS_EFETIVO, VINCULOS_COMISSIONADO, VINCULOS_CONTRATADO,
+    VINCULOS_REQUISITADO, VINCULOS_PENSAO,
     COLUNAS_MOEDA, COLUNAS_INTEIRO, COLUNAS_TEXTO,
     FAIXAS_SALARIAIS
 )
@@ -118,6 +119,42 @@ class DataProcessor:
             
         except Exception:
             return 'SEM INFORMACAO'
+
+    @staticmethod
+    def calcular_faixa_salarial_reais(valor: float) -> str:
+        """Retorna a mesma faixa salarial descrita pelos limites em reais."""
+        if pd.isna(valor) or valor == '' or valor is None:
+            return 'SEM INFORMACAO'
+        try:
+            valor_float = float(valor)
+            if valor_float <= 0:
+                return 'SEM INFORMACAO'
+
+            limite_inferior = 0.0
+            for limite_superior, _ in FAIXAS_SALARIAIS:
+                if np.isinf(limite_superior):
+                    return f'Mais de R$ {limite_inferior:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+                limite_reais = limite_superior * SALARIO_MINIMO
+                if limite_inferior == 0:
+                    rotulo = f'Até R$ {limite_reais:,.2f}'
+                else:
+                    rotulo = f'De R$ {limite_inferior:,.2f} a R$ {limite_reais:,.2f}'
+                if valor_float <= limite_reais:
+                    return rotulo.replace(',', 'X').replace('.', ',').replace('X', '.')
+                limite_inferior = limite_reais
+        except Exception:
+            return 'SEM INFORMACAO'
+
+    @staticmethod
+    def _valor_real_linha(df: pd.DataFrame) -> pd.Series:
+        """Obtém o valor real sem teto, usando símbolo quando a referência está vazia."""
+        referencia = pd.to_numeric(
+            df.get('VALOR NIVEL/REF', pd.Series(0, index=df.index)), errors='coerce'
+        ).fillna(0)
+        simbolo = pd.to_numeric(
+            df.get('VALOR_SIMBOLO', pd.Series(0, index=df.index)), errors='coerce'
+        ).fillna(0)
+        return referencia.where(referencia.ne(0), simbolo)
     
     @staticmethod
     def aplicar_teto_salarial(df: pd.DataFrame) -> pd.DataFrame:
@@ -179,6 +216,14 @@ class DataProcessor:
         df['FAIXA SALARIAL'] = df['VALOR NIVEL/REF - com teto'].apply(
             DataProcessor.calcular_faixa_salarial
         )
+
+        df['VALOR NIVEL/REF - valor real'] = DataProcessor._valor_real_linha(df)
+        df['FAIXA SALARIAL (R$)'] = df['VALOR NIVEL/REF - com teto'].apply(
+            DataProcessor.calcular_faixa_salarial_reais
+        )
+        df['FAIXA SALARIAL (R$) - VALOR REAL'] = df['VALOR NIVEL/REF - valor real'].apply(
+            DataProcessor.calcular_faixa_salarial_reais
+        )
         
         df.drop('VALOR_BASE_CALCULO', axis=1, inplace=True)
         
@@ -197,6 +242,16 @@ class DataProcessor:
         """
         vinculo = str(vinculo).upper().strip()
         
+        # Pensões devem ser separadas antes das demais categorias.
+        for padrao in VINCULOS_PENSAO:
+            if padrao in vinculo:
+                return 'PENSAO'
+
+        # Requisitados devem permanecer como categoria própria.
+        for padrao in VINCULOS_REQUISITADO:
+            if padrao in vinculo:
+                return 'REQUISITADO'
+
         # Verificar efetivo
         for padrao in VINCULOS_EFETIVO:
             if padrao in vinculo:
@@ -221,6 +276,32 @@ class DataProcessor:
             return 'COMISSIONADO'
         
         return 'OUTROS'
+
+    @staticmethod
+    def adicionar_metricas_salariais(df: pd.DataFrame) -> pd.DataFrame:
+        """Adiciona percentuais por vínculo e marca as linhas de pensão."""
+        df = df.copy()
+        if 'VINCULO' not in df.columns:
+            return df
+
+        servidores = df['VINCULO'].astype('string').str.upper().ne('PENSAO')
+        total_servidores = int(servidores.sum())
+        df['PERCENTUAL DO QUANTITATIVO'] = 0.0
+        if total_servidores:
+            df.loc[servidores, 'PERCENTUAL DO QUANTITATIVO'] = 100.0 / total_servidores
+
+        for coluna_valor, coluna_percentual in [
+            ('VALOR NIVEL/REF - com teto', 'PERCENTUAL DO VALOR (COM TETO)'),
+            ('VALOR NIVEL/REF - valor real', 'PERCENTUAL DO VALOR (VALOR REAL)')
+        ]:
+            valores = pd.to_numeric(df.get(coluna_valor, 0), errors='coerce').fillna(0)
+            total = float(valores.loc[servidores].sum())
+            df[coluna_percentual] = 0.0
+            if total:
+                df.loc[servidores, coluna_percentual] = valores.loc[servidores] / total * 100
+
+        df['EH_SERVIDOR'] = servidores
+        return df
 
     @staticmethod
     def adicionar_cargo_ajustado(df: pd.DataFrame) -> pd.DataFrame:

@@ -7,7 +7,7 @@ import io
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional
-from config import COLUNAS_MOEDA, COLUNAS_INTEIRO, COLUNAS_TEXTO
+from config import COLUNAS_MOEDA, COLUNAS_INTEIRO, COLUNAS_TEXTO, COLUNAS_PERCENTUAL
 
 
 class ExcelFormatter:
@@ -63,6 +63,9 @@ class ExcelFormatter:
             'integer': workbook.add_format({
                 'num_format': '0', 'align': 'center', 'valign': 'vcenter'
             }),
+            'percentage': workbook.add_format({
+                'num_format': '0.00%', 'align': 'center', 'valign': 'vcenter'
+            }),
             'text': workbook.add_format({
                 'align': 'center', 'valign': 'vcenter'
             }),
@@ -110,6 +113,8 @@ class ExcelFormatter:
                 ExcelFormatter._formatar_coluna_moeda(worksheet, df, col, i, formatos)
             elif col in COLUNAS_INTEIRO:
                 ExcelFormatter._formatar_coluna_inteiro(worksheet, df, col, i, formatos)
+            elif col in COLUNAS_PERCENTUAL:
+                ExcelFormatter._formatar_coluna_percentual(worksheet, df, col, i, formatos)
             elif col in COLUNAS_TEXTO:
                 ExcelFormatter._formatar_coluna_texto(worksheet, df, col, i, formatos)
         
@@ -156,6 +161,22 @@ class ExcelFormatter:
                 worksheet.write(row_num, idx, 'SEM INFORMACAO', formatos['text'])
             else:
                 worksheet.write(row_num, idx, str(valor), formatos['text'])
+
+    @staticmethod
+    def _formatar_coluna_percentual(worksheet, df, col, idx, formatos):
+        """Formata percentuais armazenados como valores de 0 a 100."""
+        for row_num in range(1, len(df) + 1):
+            valor = df.iloc[row_num - 1][col]
+            if pd.isna(valor) or valor == '' or valor is None:
+                worksheet.write(row_num, idx, 'SEM INFORMACAO', formatos['text'])
+            else:
+                try:
+                    worksheet.write_number(
+                        row_num, idx, float(valor) / 100,
+                        formatos['percentage']
+                    )
+                except (ValueError, TypeError):
+                    worksheet.write(row_num, idx, 'SEM INFORMACAO', formatos['text'])
     
     @staticmethod
     def _aplicar_formatacao_condicional(worksheet, df, formatos):
